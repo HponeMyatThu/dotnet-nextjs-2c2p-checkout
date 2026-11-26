@@ -31,6 +31,9 @@ public class TwoC2PPaymentService : ITwoC2PPaymentService
         PaymentTokenRequestArgs args, 
         CancellationToken ct = default)
     {
+        var returnUrlSeparator = _options.FrontendReturnUrl.Contains('?') ? "&" : "?";
+        var frontendReturnUrl = $"{_options.FrontendReturnUrl}{returnUrlSeparator}invoice={Uri.EscapeDataString(args.InvoiceNo)}";
+
         // 1. Construct payment token payload
         var payload = new TwoC2PPaymentTokenRequestPayload
         {
@@ -44,7 +47,7 @@ public class TwoC2PPaymentService : ITwoC2PPaymentService
             CustomerToken = args.CustomerTokens,
             CustomerTokenOnly = args.CustomerTokenOnly,
             Request3DS = args.Request3DS,
-            FrontendReturnUrl = _options.FrontendReturnUrl,
+            FrontendReturnUrl = frontendReturnUrl,
             BackendReturnUrl = _options.BackendReturnUrl
         };
 

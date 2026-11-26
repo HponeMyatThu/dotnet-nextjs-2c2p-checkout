@@ -62,16 +62,18 @@ public class PaymentNotificationServiceTests
                 RespCode: "0000", RespDesc: "Success", ChannelCode: "CC",
                 AccountNo: "411111******1111", TranRef: "REF001", CustomerToken: null, Error: null));
         _transactionRepo.Setup(r => r.GetByInvoiceNoAsync("INV001", default)).ReturnsAsync(tx);
-        _transactionRepo.Setup(r => r.UpdateAsync(It.IsAny<Transaction>(), default)).Returns(Task.CompletedTask);
-        _unitOfWork.Setup(u => u.SaveChangesAsync(default)).ReturnsAsync(1);
+        _transactionRepo.Setup(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Succeeded,
+            "0000", "Success", "CC", "411111******1111", "REF001", It.IsAny<DateTime?>(), default))
+            .ReturnsAsync(1);
 
         var result = await _sut.HandleNotificationAsync("valid-jwt");
 
         result.Success.Should().BeTrue();
-        tx.Status.Should().Be(TransactionStatus.Succeeded);
-        tx.PaidAt.Should().NotBeNull();
-        _transactionRepo.Verify(r => r.UpdateAsync(tx, default), Times.Once);
-        _unitOfWork.Verify(u => u.SaveChangesAsync(default), Times.Once);
+        result.Status.Should().Be("Succeeded");
+        _transactionRepo.Verify(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Succeeded,
+            "0000", "Success", "CC", "411111******1111", "REF001", It.IsAny<DateTime?>(), default), Times.Once);
     }
 
     [Fact]
@@ -84,15 +86,20 @@ public class PaymentNotificationServiceTests
                 CurrencyCode: "SGD", RespCode: "0000", RespDesc: "Success",
                 ChannelCode: "CC", AccountNo: null, TranRef: null, CustomerToken: null, Error: null));
         _transactionRepo.Setup(r => r.GetByInvoiceNoAsync("INV001", default)).ReturnsAsync(tx);
-        _transactionRepo.Setup(r => r.UpdateAsync(It.IsAny<Transaction>(), default)).Returns(Task.CompletedTask);
-        _unitOfWork.Setup(u => u.SaveChangesAsync(default)).ReturnsAsync(1);
+        _transactionRepo.Setup(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Failed,
+            "ERR_AMOUNT", It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), null, default))
+            .ReturnsAsync(1);
 
         var result = await _sut.HandleNotificationAsync("jwt");
 
         result.Success.Should().BeFalse();
-        tx.Status.Should().Be(TransactionStatus.Failed);
-        tx.RespCode.Should().Be("ERR_AMOUNT");
-        _transactionRepo.Verify(r => r.UpdateAsync(tx, default), Times.Once);
+        result.Status.Should().Be("Failed");
+        _transactionRepo.Verify(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Failed,
+            "ERR_AMOUNT", It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), null, default), Times.Once);
     }
 
     [Fact]
@@ -106,15 +113,20 @@ public class PaymentNotificationServiceTests
                 RespCode: "0000", RespDesc: "Success",
                 ChannelCode: "CC", AccountNo: null, TranRef: null, CustomerToken: null, Error: null));
         _transactionRepo.Setup(r => r.GetByInvoiceNoAsync("INV001", default)).ReturnsAsync(tx);
-        _transactionRepo.Setup(r => r.UpdateAsync(It.IsAny<Transaction>(), default)).Returns(Task.CompletedTask);
-        _unitOfWork.Setup(u => u.SaveChangesAsync(default)).ReturnsAsync(1);
+        _transactionRepo.Setup(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Failed,
+            "ERR_CURRENCY", It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), null, default))
+            .ReturnsAsync(1);
 
         var result = await _sut.HandleNotificationAsync("jwt");
 
         result.Success.Should().BeFalse();
-        tx.Status.Should().Be(TransactionStatus.Failed);
-        tx.RespCode.Should().Be("ERR_CURRENCY");
-        _transactionRepo.Verify(r => r.UpdateAsync(tx, default), Times.Once);
+        result.Status.Should().Be("Failed");
+        _transactionRepo.Verify(r => r.UpdateStatusConditionalAsync(
+            "INV001", TransactionStatus.Pending, TransactionStatus.Failed,
+            "ERR_CURRENCY", It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), null, default), Times.Once);
     }
 
     [Fact]

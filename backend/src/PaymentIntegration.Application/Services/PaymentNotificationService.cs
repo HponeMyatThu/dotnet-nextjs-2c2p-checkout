@@ -81,60 +81,83 @@ public class PaymentNotificationService : IPaymentNotificationService
         {
             _logger.LogError("Amount mismatch for invoice {InvoiceNo}: expected {Expected}, got {Received}", 
                 transaction.InvoiceNo, transaction.Amount, decoded.Amount.Value);
-            transaction.Status = TransactionStatus.Failed;
-            transaction.RespCode = "ERR_AMOUNT";
-            transaction.RespDesc = "Notification amount does not match transaction amount.";
-            await _transactionRepository.UpdateAsync(transaction, ct);
-            await _unitOfWork.SaveChangesAsync(ct);
-            return new PaymentNotificationResultDto(false, "Amount mismatch", transaction.InvoiceNo, transaction.Status.ToString());
+            await _transactionRepository.UpdateStatusConditionalAsync(
+                transaction.InvoiceNo,
+                TransactionStatus.Pending,
+                TransactionStatus.Failed,
+                "ERR_AMOUNT",
+                "Notification amount does not match transaction amount.",
+                decoded.ChannelCode ?? transaction.PaymentChannel,
+                decoded.AccountNo ?? transaction.MaskedCardNo,
+                decoded.TranRef ?? transaction.ProviderRef,
+                null,
+                ct);
+            return new PaymentNotificationResultDto(false, "Amount mismatch", transaction.InvoiceNo, TransactionStatus.Failed.ToString());
         }
 
         if (!string.IsNullOrEmpty(decoded.CurrencyCode) && !decoded.CurrencyCode.Equals(transaction.Currency, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogError("Currency mismatch for invoice {InvoiceNo}: expected {Expected}, got {Received}", 
                 transaction.InvoiceNo, transaction.Currency, decoded.CurrencyCode);
-            transaction.Status = TransactionStatus.Failed;
-            transaction.RespCode = "ERR_CURRENCY";
-            transaction.RespDesc = "Notification currency does not match transaction currency.";
-            await _transactionRepository.UpdateAsync(transaction, ct);
-            await _unitOfWork.SaveChangesAsync(ct);
-            return new PaymentNotificationResultDto(false, "Currency mismatch", transaction.InvoiceNo, transaction.Status.ToString());
+            await _transactionRepository.UpdateStatusConditionalAsync(
+                transaction.InvoiceNo,
+                TransactionStatus.Pending,
+                TransactionStatus.Failed,
+                "ERR_CURRENCY",
+                "Notification currency does not match transaction currency.",
+                decoded.ChannelCode ?? transaction.PaymentChannel,
+                decoded.AccountNo ?? transaction.MaskedCardNo,
+                decoded.TranRef ?? transaction.ProviderRef,
+                null,
+                ct);
+            return new PaymentNotificationResultDto(false, "Currency mismatch", transaction.InvoiceNo, TransactionStatus.Failed.ToString());
         }
 
-        // 5. Update transaction state conditionally
+        // 5. Update transaction state atomically WHERE status = 'Pending'
         if (decoded.RespCode == "0000")
         {
-            transaction.Status = TransactionStatus.Succeeded;
-            transaction.PaymentChannel = decoded.ChannelCode ?? transaction.PaymentChannel;
-            transaction.MaskedCardNo = decoded.AccountNo ?? transaction.MaskedCardNo;
-            transaction.ProviderRef = decoded.TranRef ?? transaction.ProviderRef;
-            transaction.RespCode = decoded.RespCode;
-            transaction.RespDesc = decoded.RespDesc ?? "Success";
-            transaction.PaidAt = DateTime.UtcNow;
+            var paidAt = DateTime.UtcNow;
+            var updatedRows = await _transactionRepository.UpdateStatusConditionalAsync(
+                transaction.InvoiceNo,
+                TransactionStatus.Pending,
+                TransactionStatus.Succeeded,
+                decoded.RespCode,
+                decoded.RespDesc ?? "Success",
+                decoded.ChannelCode ?? transaction.PaymentChannel,
+                decoded.AccountNo ?? transaction.MaskedCardNo,
+                decoded.TranRef ?? transaction.ProviderRef,
+                paidAt,
+                ct);
 
-            await _transactionRepository.UpdateAsync(transaction, ct);
-            await _unitOfWork.SaveChangesAsync(ct);
+            if (updatedRows == 0)
+            {
+                _logger.LogInformation("Transaction {InvoiceNo} was already finalized concurrently.", transaction.InvoiceNo);
+            }
 
             // 6. Save customer token if present (for recurring/save-card scenario)
             if (!string.IsNullOrWhiteSpace(decoded.CustomerToken))
             {
                 await SaveCustomerCardSafelyAsync(transaction.CustomerId, decoded.CustomerToken, decoded.AccountNo, ct);
             }
+
+            return new PaymentNotificationResultDto(true, "Notification processed successfully", transaction.InvoiceNo, TransactionStatus.Succeeded.ToString());
         }
         else
         {
-            transaction.Status = TransactionStatus.Failed;
-            transaction.RespCode = decoded.RespCode;
-            transaction.RespDesc = decoded.RespDesc;
-            transaction.PaymentChannel = decoded.ChannelCode;
-            transaction.MaskedCardNo = decoded.AccountNo;
-            transaction.ProviderRef = decoded.TranRef;
+            await _transactionRepository.UpdateStatusConditionalAsync(
+                transaction.InvoiceNo,
+                TransactionStatus.Pending,
+                TransactionStatus.Failed,
+                decoded.RespCode,
+                decoded.RespDesc,
+                decoded.ChannelCode ?? transaction.PaymentChannel,
+                decoded.AccountNo ?? transaction.MaskedCardNo,
+                decoded.TranRef ?? transaction.ProviderRef,
+                null,
+                ct);
 
-            await _transactionRepository.UpdateAsync(transaction, ct);
-            await _unitOfWork.SaveChangesAsync(ct);
+            return new PaymentNotificationResultDto(true, "Notification processed successfully", transaction.InvoiceNo, TransactionStatus.Failed.ToString());
         }
-
-        return new PaymentNotificationResultDto(true, "Notification processed successfully", transaction.InvoiceNo, transaction.Status.ToString());
     }
 
     private async Task SaveCustomerCardSafelyAsync(

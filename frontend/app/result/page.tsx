@@ -131,9 +131,9 @@ function ResultContent() {
               {transaction.status === 'Succeeded' ? '✅' : transaction.status === 'Failed' ? '❌' : '⏳'}
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              {transaction.status === 'Succeeded' ? 'Payment Succeeded' :
+              {transaction.status === 'Succeeded' ? 'Payment succeeded' :
                transaction.status === 'Failed' ? 'Payment Failed' :
-               'Processing Payment...'}
+               'Processing payment...'}
             </h1>
             <div className="flex justify-center mt-2">
               <StatusBadge status={transaction.status} />

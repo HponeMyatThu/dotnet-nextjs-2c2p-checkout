@@ -74,6 +74,23 @@ services:
       - payment_net
     restart: unless-stopped
 
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: payment_phpmyadmin
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: payment_user
+      PMA_PASSWORD: payment_password
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - payment_net
+    restart: unless-stopped
+
 volumes:
   mysql_data:
 
