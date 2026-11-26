@@ -148,10 +148,23 @@ public class TwoC2PPaymentService : ITwoC2PPaymentService
 
         var signedJwt = _jwtService.SignPayload(payload);
         var wrapper = await _client.PaymentInquiryAsync(signedJwt, ct);
-        if (wrapper == null || string.IsNullOrWhiteSpace(wrapper.Payload))
+        if (wrapper == null)
         {
             _logger.LogError("Payment inquiry returned null response for invoice {InvoiceNo}", invoiceNo);
             return new TwoC2PInquiryResult(false, invoiceNo, null, null, "ERR_HTTP", "Failed to query 2C2P payment inquiry API", null, null, null, null);
+        }
+
+        if (!string.IsNullOrEmpty(wrapper.RespCode) && wrapper.RespCode != "0000")
+        {
+            _logger.LogInformation("2C2P payment inquiry returned direct code {RespCode}: {RespDesc} for invoice {InvoiceNo}",
+                wrapper.RespCode, wrapper.RespDesc, invoiceNo);
+            return new TwoC2PInquiryResult(false, invoiceNo, null, null, wrapper.RespCode, wrapper.RespDesc, null, null, null, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(wrapper.Payload))
+        {
+            _logger.LogError("Payment inquiry returned empty payload for invoice {InvoiceNo}", invoiceNo);
+            return new TwoC2PInquiryResult(false, invoiceNo, null, null, "ERR_HTTP", "Empty payment inquiry response payload", null, null, null, null);
         }
 
         // Verify and decode response JWT
