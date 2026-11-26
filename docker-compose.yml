@@ -1,0 +1,82 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: payment_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: payment_db
+      MYSQL_USER: payment_user
+      MYSQL_PASSWORD: payment_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - payment_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: payment_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - payment_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: src/PaymentIntegration.API/Dockerfile
+    container_name: payment_backend
+    ports:
+      - "5001:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Server=mysql;Port=3306;Database=payment_db;User=payment_user;Password=payment_password;AllowPublicKeyRetrieval=True;"
+      Redis__ConnectionString: "redis:6379"
+      TwoC2P__MerchantId: "JT01"
+      TwoC2P__SecretKey: "ECC4E54DBA738857B84A7EBC6B5DC7187B8DA68750E88AB53AAA41F548D6F2D9"
+      TwoC2P__BaseUrl: "https://sandbox-pgw.2c2p.com"
+      TwoC2P__FrontendReturnUrl: "http://localhost:3000/result"
+      TwoC2P__BackendReturnUrl: "http://backend:8080/api/payments/2c2p/notification"
+      TwoC2P__TimeoutSeconds: "30"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - payment_net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: payment_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:5001"
+    depends_on:
+      - backend
+    networks:
+      - payment_net
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+
+networks:
+  payment_net:
+    driver: bridge
