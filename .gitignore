@@ -1,0 +1,50 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+*.DotSettings
+
+# Build output
+**/publish/
+out/
+
+# Secrets & environment (never commit real credentials)
+appsettings.Production.json
+appsettings.Local.json
+.env
+.env.local
+.env.production
+.env.*.local
+secrets/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+npm-debug.log*
+
+# Docker
+*.tar
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# JetBrains
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# Misc
+*.log
+*.tmp
+Thumbs.db
+.local/
+Library/
+*.pdf
