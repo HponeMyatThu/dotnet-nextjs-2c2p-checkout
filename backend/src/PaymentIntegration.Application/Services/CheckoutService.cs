@@ -293,36 +293,58 @@ public class CheckoutService : ICheckoutService
         // On 2000 (transaction completed) or other non-3DS responses: Confirm with Payment Inquiry!
         // 2000 alone does not mean payment succeeded. Call Payment Inquiry.
         var inquiryResult = await _twoC2PPaymentService.PaymentInquiryAsync(transaction.InvoiceNo, ct);
+        TransactionStatus targetStatus;
+        DateTime? paidAt = null;
+
         if (inquiryResult.Success && inquiryResult.RespCode == "0000")
         {
             // Verify amount & currency
             if (inquiryResult.Amount.HasValue && inquiryResult.Amount.Value == transaction.Amount &&
                 (string.IsNullOrEmpty(inquiryResult.CurrencyCode) || inquiryResult.CurrencyCode.Equals(transaction.Currency, StringComparison.OrdinalIgnoreCase)))
             {
-                transaction.Status = TransactionStatus.Succeeded;
-                transaction.PaidAt = DateTime.UtcNow;
+                targetStatus = TransactionStatus.Succeeded;
+                paidAt = DateTime.UtcNow;
             }
             else
             {
                 _logger.LogWarning("Payment Inquiry amount or currency mismatch for invoice {InvoiceNo}", transaction.InvoiceNo);
-                transaction.Status = TransactionStatus.Failed;
+                targetStatus = TransactionStatus.Failed;
             }
         }
         else
         {
-            transaction.Status = TransactionStatus.Failed;
+            targetStatus = TransactionStatus.Failed;
         }
 
-        transaction.RespCode = inquiryResult.RespCode ?? doPaymentResult.RespCode;
-        transaction.RespDesc = inquiryResult.RespDesc ?? doPaymentResult.RespDesc;
-        transaction.PaymentChannel = inquiryResult.ChannelCode ?? doPaymentResult.ChannelCode ?? "CC";
-        transaction.MaskedCardNo = inquiryResult.AccountNo ?? card.MaskedCardNo;
-        transaction.ProviderRef = inquiryResult.TranRef;
+        var respCode = inquiryResult.RespCode ?? doPaymentResult.RespCode;
+        var respDesc = inquiryResult.RespDesc ?? doPaymentResult.RespDesc;
+        var paymentChannel = inquiryResult.ChannelCode ?? doPaymentResult.ChannelCode ?? "CC";
+        var maskedCardNo = inquiryResult.AccountNo ?? card.MaskedCardNo;
+        var providerRef = inquiryResult.TranRef;
 
-        await _transactionRepository.UpdateAsync(transaction, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
+        // Atomic conditional update WHERE status = 'Pending' so concurrent backend notification cannot conflict
+        var updatedRows = await _transactionRepository.UpdateStatusConditionalAsync(
+            transaction.InvoiceNo,
+            TransactionStatus.Pending,
+            targetStatus,
+            respCode,
+            respDesc,
+            paymentChannel,
+            maskedCardNo,
+            providerRef,
+            paidAt,
+            ct);
 
-        return new CheckoutResponseDto(transaction.InvoiceNo, transaction.Status.ToString(), null);
+        if (updatedRows == 0)
+        {
+            var latest = await _transactionRepository.GetByInvoiceNoAsync(transaction.InvoiceNo, ct);
+            if (latest != null)
+            {
+                return new CheckoutResponseDto(latest.InvoiceNo, latest.Status.ToString(), null);
+            }
+        }
+
+        return new CheckoutResponseDto(transaction.InvoiceNo, targetStatus.ToString(), null);
     }
 
     private static string GenerateInvoiceNo()
