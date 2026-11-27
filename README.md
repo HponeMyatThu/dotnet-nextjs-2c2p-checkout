@@ -135,6 +135,29 @@ flowchart LR
 
 ## 4. Payment Scenarios
 
+```mermaid
+flowchart TD
+    A["User clicks Pay<br/>(Idempotency-Key + Redis Lock + Pending TX)"] --> B{"Payment Flow"}
+
+    B -- "1. OneTime (New Method)" --> C["Payment Token<br/>(All channels)"]
+    C --> D["2C2P Hosted Page"]
+    D --> G["Webhook / Payment Inquiry<br/>Update WHERE status = 'Pending'"]
+
+    B -- "2. Recurring (New Method)" --> E["Payment Token<br/>(CC + tokenize: true)"]
+    E --> F["2C2P Hosted Page<br/>(Save Card option)"]
+    F --> G
+    G -- "If customerToken returned" --> H["Save card to customer_card"]
+    H --> I
+
+    B -- "3. Saved Card" --> J["Payment Token<br/>(customerTokenOnly: true)"]
+    J --> K["Do Payment (Direct API)"]
+    K -- "1001 (3DS)" --> L["3DS Redirect"]
+    L --> I
+    K -- "2000 / Done" --> M["Payment Inquiry<br/>(0000 = Succeeded)"]
+    M --> I["/result Page<br/>(Polls DB for Succeeded / Failed)"]
+    G --> I
+```
+
 ### Scenario A — OneTime Product / New Payment Method
 
 1. User selects a **OneTime** product, clicks Pay  
