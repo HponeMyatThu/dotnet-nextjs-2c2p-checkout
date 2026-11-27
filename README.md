@@ -191,6 +191,128 @@ Same as Scenario A except:
 
 > ⚠️ `respCode 2000` from Do Payment does NOT mean success. Payment Inquiry is always required.
 
+### Checkout & Post-Redirect Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant FE as Next.js Frontend<br/>(:3000)
+    participant API as .NET Backend API<br/>(:5001)
+    participant Redis as Redis Lock
+    participant DB as MySQL 8
+    participant PGW as 2C2P Gateway<br/>(sandbox-pgw.2c2p.com)
+
+    User->>FE: Click Pay on /checkout
+    FE->>API: POST /api/checkout<br/>(Header: Idempotency-Key: UUID)
+    API->>DB: Check existing Idempotency-Key
+    API->>Redis: SET lock:checkout:{key} NX PX 15000
+    API->>DB: Insert Pending Transaction<br/>(invoiceNo, amount, currency)
+
+    API->>PGW: POST /payment/4.3/paymenttoken<br/>{"payload": "<HS256 JWT>"}
+    PGW-->>API: {"payload": "<HS256 JWT>"}<br/>(paymentToken, webPaymentUrl, respCode: 0000)
+    API->>API: Verify response JWT signature
+
+    alt Flow 1 (OneTime) or Flow 2 (Recurring + Tokenize)
+        API-->>FE: 200 OK {invoiceNo, status: "Pending", redirectUrl}
+        FE->>PGW: Browser redirects to webPaymentUrl
+        User->>PGW: Enters card / completes 3DS OTP (123456)
+
+        PGW-->>API: POST /api/payments/2c2p/notification<br/>{"payload": "<HS256 JWT>"}
+        API->>API: Verify JWT + check amount & currency
+        API->>DB: UPDATE status = Succeeded/Failed<br/>WHERE status = 'Pending'
+        opt If customerToken present & respCode == 0000
+            API->>DB: Save customerToken to customer_card
+        end
+        API-->>PGW: 200 OK
+
+        PGW->>FE: POST /result?invoice={invoiceNo} (Origin: null)
+        FE->>FE: middleware.ts converts POST -> 303 GET /result?invoice={invoiceNo}
+        loop Poll every 3s while status == Pending
+            FE->>API: GET /api/transactions/{invoiceNo}
+            API->>DB: Read transaction fresh (no cache)
+            opt If still Pending (webhook not yet received)
+                API->>PGW: POST /payment/4.3/paymentinquiry<br/>{"payload": "<HS256 JWT>"}
+                PGW-->>API: {"payload": "<HS256 JWT>"}
+                API->>DB: Atomic UPDATE WHERE status = 'Pending'
+            end
+            API-->>FE: 200 OK TransactionDto
+        end
+        FE-->>User: Show "Payment succeeded" or Failure + "Go Back & Try Again"
+
+    else Flow 3 (Saved Card - Direct API)
+        API->>PGW: POST /payment/4.3/payment (Plain JSON, no JWT)
+        PGW-->>API: {respCode: "2000" or "1001", rawData}
+        alt respCode == 1001 (3DS Required)
+            API-->>FE: 200 OK {invoiceNo, status: "Pending", redirectUrl: 3DSUrl}
+            FE->>PGW: Redirect to 3DS -> returns to /result?invoice={invoiceNo}
+        else respCode == 2000 / Completed
+            API->>PGW: POST /payment/4.3/paymentinquiry {"payload": "<JWT>"}
+            PGW-->>API: {"payload": "<JWT>"} (0000 = Succeeded)
+            API->>DB: Atomic UPDATE WHERE status = 'Pending'
+            API-->>FE: 200 OK {invoiceNo, status, redirectUrl: null}
+            FE->>FE: Navigate to /result?invoice={invoiceNo}
+        end
+    end
+```
+
+### API Payloads per Step
+
+1. **Frontend → Backend (`POST /api/checkout`, Header `Idempotency-Key: <UUID>`):**
+   ```json
+   { "customerId": 1, "productId": 3, "customerCardId": null }
+   ```
+   Response:
+   ```json
+   { "invoiceNo": "INV20261126103457706620", "status": "Pending", "redirectUrl": "https://sandbox-pgw-ui.2c2p.com/payment/4.3/#/token/..." }
+   ```
+
+2. **Backend → 2C2P (`POST /payment/4.3/paymenttoken`, wrapped as `{"payload": "<HS256 JWT>"}`):**
+   ```json
+   {
+     "merchantID": "JT04",
+     "invoiceNo": "INV20261126103457706620",
+     "description": "Basic Gym Pass",
+     "amount": 25.00,
+     "currencyCode": "SGD",
+     "frontendReturnUrl": "http://localhost:3000/result?invoice=INV20261126103457706620",
+     "backendReturnUrl": "https://your-tunnel/api/payments/2c2p/notification"
+   }
+   ```
+   *(Recurring adds `"paymentChannel": ["CC"], "tokenize": true`; Saved Card adds `"paymentChannel": ["CC"], "customerToken": ["<token>"], "customerTokenOnly": true, "request3DS": "N"`.)*
+
+3. **Backend → 2C2P Do Payment (`POST /payment/4.3/payment`, plain JSON for Saved Card):**
+   ```json
+   {
+     "paymentToken": "<paymentToken>",
+     "payment": {
+       "code": { "channelCode": "CC" },
+       "data": { "customerToken": "<customerToken>", "token": "<customerToken>" }
+     }
+   }
+   ```
+
+4. **2C2P → Backend Webhook (`POST /api/payments/2c2p/notification`, `{"payload": "<HS256 JWT>"}`):**
+   ```json
+   {
+     "merchantID": "JT04",
+     "invoiceNo": "INV20261126103457706620",
+     "amount": 25.00,
+     "currencyCode": "SGD",
+     "channelCode": "VI",
+     "accountNo": "411111XXXXXX1111",
+     "tranRef": "4297542",
+     "customerToken": "26112622413700353705",
+     "respCode": "0000",
+     "respDesc": "Success"
+   }
+   ```
+
+5. **Backend → 2C2P Inquiry (`POST /payment/4.3/paymentinquiry`, `{"payload": "<HS256 JWT>"}`):**
+   ```json
+   { "merchantID": "JT04", "invoiceNo": "INV20261126103457706620", "locale": "en" }
+   ```
+
 ---
 
 ## 5. Idempotency & Concurrency Safety
